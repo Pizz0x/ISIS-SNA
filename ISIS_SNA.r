@@ -1,4 +1,5 @@
 library(igraph)
+library(lubridate)
 df <- read.csv("tweets.csv") # import the data
 head(df)  
 
@@ -108,7 +109,62 @@ colorVals <- rainbow(10)[matchIndex[!is.na(matchIndex)]]
 V(net)$color[!is.na(matchIndex)] <- colorVals
 plot.igraph(net, vertex.label = NA,layout=l, vertex.size=5)
 
+
+
 # we now want to do a temporal analysis on the connections, specifically we want to check for triadic closures
+
+# first we need to sort the data set based on the timestamp:
+class(df$time) # we want a datatime value not character
+df$time <- mdy_hm(df$time)
+class(df$time)
+sorted_df <- df[order(df$time),]
+
+# now we want to create the graph progressively by the time, the idea is, since the graph is quite sparse, to see how it evolve month by month
+df$month <- format(df$time, "%Y-%m") # to do this we need a new column -> month
+net <- make_empty_graph(directed=F) # start from an empty graph
+# and for each month, we add the edges for the monthly tweets, measure the number of triadic closure and update the graph
+triangles_over_time <- c()
+months <- sort(unique(df$month))
+months <- months[-c(1,2,3,4,5)]
+months
+par(mfrow=c(3,4))
+
+for (m in months){
+  df_month <- df[df$month == m, ]
+  
+  # this part is the same as before to create the edges:
+  edges <- c()
+  for (i in 1:nrow(df_month)) { 
+    from_user <- df_month$username[i]
+    tweet_text <- df_month$tweets[i]
+    
+    mentions <- regmatches(tweet_text, gregexpr("@\\w+", tweet_text))[[1]] # get the string in the text that are composed by @*username* 
+    
+    if (length(mentions) > 0) {
+      for (mention in mentions) {
+        to_user <- sub("@", "", mention)  # remove the @ from the username
+        if(to_user %in% usernames)  #  save only if the mentioned user is in our data set
+          edges <- c(edges, from_user, to_user)
+      }
+    }
+  }
+  if(length(edges) > 0){
+    new_edges <- matrix(edges, ncol=2, byrow=T)
+    new_nodes <- setdiff(unique(c(new_edges)), V(net)$name)
+    if (length(new_nodes) > 0) {
+      net <- add_vertices(net, length(new_nodes), name=new_nodes)
+    }
+    net <- add_edges(net, t(new_edges))
+  }
+  plot(
+    net, 
+    main=paste("Rete al mese:", m),
+    layout=layout_with_fr(net),
+    vertex.size=3, 
+    vertex.label=NA,
+    edge.arrow.size=.2
+  )
+}
 
 
 
