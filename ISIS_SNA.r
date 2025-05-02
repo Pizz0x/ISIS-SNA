@@ -100,20 +100,21 @@ sort(betweenCent,decreasing=TRUE)[1:10]
 
 # let's now try to detect the communities -> disconnected parts of the graph
 w <- cluster_edge_betweenness(net2)
-sort(table(w$membership))
-# we have 5 significant communities with 9 or more nodes, let's remake the graph with different color for each community
+sort(table(w$membership)) # vector that associate each node with a community that represent the nodes that interact with each other mostly.
+# we have 5 significant communities with 9 or more nodes, let's remake the graph with different color for each community -> graphical visualization:
 V(net2)$color <- rep("white", length(w$membership))
 keepTheseCommunities <- names(sizes(w))[sizes(w) > 4]
 matchIndex <- match(w$membership, keepTheseCommunities) # like %in%
 colorVals <- rainbow(10)[matchIndex[!is.na(matchIndex)]]
 V(net2)$color[!is.na(matchIndex)] <- colorVals
 plot.igraph(net2, vertex.label = NA,layout=layout, vertex.size=5)
-
+# thanks to community, it's possible to do an analysis of the content for each community or check the community over time to see if they change or not
 
 
 # we now want to do a temporal analysis on the connections, specifically we want to check for triadic closures:
+# How much more likely is a link to form between two people in a social network if they already have a connection in common?
 # if A is friend with B and B is friend with C, then A tend to become friend with C
-# we want to calculate the number of triangles that will create over time and how many open triads become close triads
+# we want to calculate the number of triangles that will create over time, how many open triads become close triads and if a connection is created more probably if there is already a common connection -> so if the network evolve more thanks to triadic closure or new casual connection
 
 # first we need to sort the data set based on the timestamp:
 class(df$time) # we want a datatime value not character
