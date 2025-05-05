@@ -40,7 +40,7 @@ head(mention_counts)
 
 # now we have all we need to create our first graph
 
-net <- graph_from_data_frame(d=mention_counts, vertices = usernames, directed=F)
+net <- graph_from_data_frame(d=mention_counts, vertices = usernames, directed=T)
 net <- simplify(net, remove.loops=T)
 V(net)$size <- 5
 l <- layout.fruchterman.reingold(net)
@@ -67,7 +67,11 @@ dyad_census(net) # we can say that out network is definitely sparse
 
 
 # Let's get some more insight of the network, but first it's better to remove the nodes that do not appear in the edge table since they are not relevant for this part of the analysis
-net2 <- net - V(net)[degree(net, mode="all")==0]
+und_net <- graph_from_data_frame(d=mention_counts, vertices = usernames, directed=F)
+und_net <- simplify(und_net, remove.loops=T)
+E(und_net)$width <- E(und_net)$weight/50
+V(und_net)$size <- 5
+net2 <- und_net - V(und_net)[degree(und_net, mode="all")==0]
 layout <- layout.fruchterman.reingold(net2)
 plot(net2, edge.arrow.size=.1, edge.curved=.1, layout=layout, vertex.label=NA) # in this way we also get a cleaner graph
 plot(net2, edge.arrow.size=.1, edge.curved=.1, layout=layout_in_circle, vertex.label=NA)
@@ -114,7 +118,7 @@ plot.igraph(net2, vertex.label = NA,layout=layout, vertex.size=5)
 # we now want to do a temporal analysis on the connections, specifically we want to check for triadic closures:
 # How much more likely is a link to form between two people in a social network if they already have a connection in common?
 # if A is friend with B and B is friend with C, then A tend to become friend with C
-# we want to calculate the number of triangles that will create over time, how many open triads become close triads and if a connection is created more probably if there is already a common connection -> so if the network evolve more thanks to triadic closure or new casual connection
+# we want to calculate the number of triangles that will create over time and the probability of triadic closure, how many open triads become close triads.
 
 # first we need to sort the data set based on the timestamp:
 class(df$time) # we want a datatime value not character
@@ -126,9 +130,13 @@ sorted_df <- df[order(df$time),]
 df$month <- format(df$time, "%Y-%m") # to do this we need a new column -> month
 net3 <- make_empty_graph(directed=F) # start from an empty graph
 net3 <- add_vertices(net3, length(users), name=users)
+layout2 <- layout_on_sphere(net3)
 #layout <- layout_in_circle(net)
 # and for each month, we add the edges for the monthly tweets, measure the number of triadic closure and update the graph
 triangles_over_time <- c()
+closure_prob_ot <- c()
+opt <- c()
+graph_list <- list()
 months <- sort(unique(df$month))
 months <- months[-c(1,2,3,4,5,6,7,8)]
 months
@@ -153,31 +161,89 @@ for (m in months){
       }
     }
   }
+  # create the new edges
   if(length(edges) > 0){
     new_edges <- matrix(edges, ncol=2, byrow=T)
     #new_nodes <- setdiff(unique(c(new_edges)), V(net)$name)
     #if (length(new_nodes) > 0) {
     #  net <- add_vertices(net, length(new_nodes), name=new_nodes)
     #}
-    net3 <- add_edges(net3, t(new_edges))
+    for (i in 1:nrow(new_edges)){  # we add the edge only if it is not a loop(mention to itself), we do this because this type of connection are not useful for our research. and if it wasn't already in the graph, we are interested in the single connection, if there are more we can use it to distinguish strong and weak ties
+      if(new_edges[i,1] != new_edges[i,2] && !are.connected(net3, new_edges[i,1], new_edges[i,2]))
+        net3 <- add_edges(net3, c(new_edges[i,1], new_edges[i,2]))
+        
+    }
   }
+  # calculate the triangles and probability of closure
   triangles <- sum(count_triangles(net3))/3
   triangles_over_time <- c(triangles_over_time, triangles)
-  net3 <- simplify(net3, remove.multiple = TRUE, remove.loops=T)
+  # calculate the number of open triangles -> we have 2 of the 3 edges already and we want to close it so add the remaining edge
+  deg <- degree(net3)
+  open_triangles <- sum(deg * (deg-1) / 2) # sum of possible combination for each vertex
+  if(open_triangles > 0)
+    closure_prob <- sum(count_triangles(net3)) / open_triangles # the number of closure triadic compared to the number of possible triadic
+  else 
+    closure_prob <- 0
+  opt <- c(opt, open_triangles)
+  closure_prob_ot <- c(closure_prob_ot, closure_prob)
+  # save the snapshot of the graphs
+  graph_list[[m]] <- net3
+  # plot the graph of the month
   plot(
     net3, 
     main=paste("Rete al mese:", m),
-    layout=layout,
-    vertex.size=3, 
+    layout=layout2,
     vertex.label=NA,
-    edge.arrow.size=.2
+    edge.arrow.size=.2,
+    vertex.size=deg/10+2
   )
 }
 
 par(mfrow = c(1, 1))
+plot(
+  net3, 
+  main=paste("Rete al mese:", m),
+  layout=layout2,
+  vertex.label=NA,
+  edge.arrow.size=.2,
+  vertex.size=deg/10+2
+)
+triangles_over_time
+opt
+closure_prob_ot
 
 plot(months, triangles_over_time, type = "b", col = "blue",
      xlab = "Mese", ylab = "Triangoli (Triadic Closure)", main = "Evoluzione del Triadic Closure")
+
+
+
+# we want now to check if a connection is created more probably if there is already a common connection -> so if the network evolve more thanks to triadic closure or new casual connection.
+# to do this we will track link formation, from a snapshot to another we will:
+# - identify the pairs of nodes that have k connection in common in the first snapshot but are not directly connected by an edge
+# - find T(k): the fraction of these pairs that have formed an edge by the time of the second snapshot
+# we will then plot T as a function to illustrate the effect of common friends on the formation of links
+
+T_k <- matrix(0, nrow = length(months)-1, ncol = 6) # when k is 5 and above in just one column
+#for (i in 1:(length(months)-1)){
+snap1 <- graph_list[[months[5]]]
+snap2 <- graph_list[[months[6]]]
+adj1 <- as_adj(g1, sparse = FALSE)
+adj2 <- as_adj(g2, sparse=FALSE)
+# first we get the common connections between each pair of nodes 
+com_connection <- adj1 %*% adj1 # this give us a matrix containing in each cell the number of path of length 2 between the nodes of row i and column j, so basically the number of common neighbors between node i and node j
+# we now have to obtain only the pairs that haven't already formed an edge, so we are interested only in pair that aren't connected in adj1 and check if they have formed a connection in adj2, we use com_connection to know how many common connection they have so to save them into the right column
+for(i in 1:(nrow(adj1))){
+  for(j in (i+1):(ncol(adj1))){
+    if(adj1[i,j]==0 && adj2[i,j]==1){ # if they don't have a connection in the first snapshot but they do have one in the second
+      k <- com_connection[i,j]
+      if(k>5) # we group all the one with above 5 connection together
+        k <- 5
+      T_k[i, k+1] <- T_k[i, k+1] + 1 # increase the function
+    }
+  }
+}
+#}
+
 
 
 # we are now interested in the most used words in the tweets of the ISIS fan, so from the starting dataset, we are interested in the fields tweet
