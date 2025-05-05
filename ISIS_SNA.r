@@ -223,39 +223,43 @@ plot(months, triangles_over_time, type = "b", col = "blue",
 # - find T(k): the fraction of these pairs that have formed an edge by the time of the second snapshot
 # we will then plot T as a function to illustrate the effect of common friends on the formation of links
 
-T_k <- matrix(0, nrow = length(months)-1, ncol = 6) # when k is 5 and above in just one column
+T_k <- matrix(0, nrow = length(months)-1, ncol = 2) # when k is 5 and above in just one column
 
 for (m in 1:(length(months)-1)){
   snap1 <- graph_list[[months[m]]]
-  snap2 <- graph_list[[months[m]]]
+  snap2 <- graph_list[[months[m+1]]]
   adj1 <- as_adj(snap1, sparse = FALSE)
   adj2 <- as_adj(snap2, sparse=FALSE)
   # first we get the common connections between each pair of nodes 
   com_connection <- adj1 %*% adj1 # this give us a matrix containing in each cell the number of path of length 2 between the nodes of row i and column j, so basically the number of common neighbors between node i and node j
   # we now have to obtain only the pairs that haven't already formed an edge, so we are interested only in pair that aren't connected in adj1 and check if they have formed a connection in adj2, we use com_connection to know how many common connection they have so to save them into the right column
-  pairs <- numeric(6) # the number of pair that have k connection in common in the first snapshot but are not directly connected by an edge
+  pairs <- numeric(2) # the number of pair that have k connection in common in the first snapshot but are not directly connected by an edge
   n <- nrow(adj1)
   for(i in 1:(n-1)){
     for(j in (i+1):n){
       if(adj1[i,j]==0){  # if they don't have a connection in the first snaphshot
         k <- com_connection[i,j]
-        if(k>5) # we group all the one with above 5 connection together
-          k <- 5
+        if(k>1) # we group all the one with above 5 connection together
+          k <- 1
         
         pairs[[k+1]] <- pairs[[k+1]] + 1
         if(adj2[i,j]==1)
-          T_k[i, k+1] <- T_k[i, k+1] + 1 # increase the function
+          T_k[m, k+1] <- T_k[m, k+1] + 1 # increase the function
       }
     }
   }
+  T_k[m,] <- T_k[m,] / pairs
 }
 T_k
-ecount(snap1)
-ecount(snap2)
-pairs
-T_k <- T_k / pairs
-T_k[1,]
-#}
+t_k <- colMeans(T_k, na.rm = TRUE)
+t_k
+k_values <- c("0", "1")
+k_values
+
+plot(k_values, t_k, type = "b", pch = 16, col = "blue",
+     xlab = "Grado k", ylab = "t(k)",
+     main = "Triadic Closure con barre di errore")
+# we can see that indeed the triadic closure means a lot in the formation of a connection: when 2 nodes had 0 connection in common at the beginning of a month, the probabilty for them to create a connection in that month was on average 0.007 meanwhile when they had 1 or more connection in common, the number increase a lot
 
 
 
