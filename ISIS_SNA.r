@@ -187,7 +187,7 @@ for (m in months){
   opt <- c(opt, open_triangles)
   closure_prob_ot <- c(closure_prob_ot, closure_prob)
   # save the snapshot of the graphs
-  graph_list[[m]] <- net3
+  graph_list[[m]] <- as.undirected(net3)
   # plot the graph of the month
   plot(
     net3, 
@@ -224,24 +224,37 @@ plot(months, triangles_over_time, type = "b", col = "blue",
 # we will then plot T as a function to illustrate the effect of common friends on the formation of links
 
 T_k <- matrix(0, nrow = length(months)-1, ncol = 6) # when k is 5 and above in just one column
-#for (i in 1:(length(months)-1)){
-snap1 <- graph_list[[months[5]]]
-snap2 <- graph_list[[months[6]]]
-adj1 <- as_adj(g1, sparse = FALSE)
-adj2 <- as_adj(g2, sparse=FALSE)
-# first we get the common connections between each pair of nodes 
-com_connection <- adj1 %*% adj1 # this give us a matrix containing in each cell the number of path of length 2 between the nodes of row i and column j, so basically the number of common neighbors between node i and node j
-# we now have to obtain only the pairs that haven't already formed an edge, so we are interested only in pair that aren't connected in adj1 and check if they have formed a connection in adj2, we use com_connection to know how many common connection they have so to save them into the right column
-for(i in 1:(nrow(adj1))){
-  for(j in (i+1):(ncol(adj1))){
-    if(adj1[i,j]==0 && adj2[i,j]==1){ # if they don't have a connection in the first snapshot but they do have one in the second
-      k <- com_connection[i,j]
-      if(k>5) # we group all the one with above 5 connection together
-        k <- 5
-      T_k[i, k+1] <- T_k[i, k+1] + 1 # increase the function
+
+for (m in 1:(length(months)-1)){
+  snap1 <- graph_list[[months[m]]]
+  snap2 <- graph_list[[months[m]]]
+  adj1 <- as_adj(snap1, sparse = FALSE)
+  adj2 <- as_adj(snap2, sparse=FALSE)
+  # first we get the common connections between each pair of nodes 
+  com_connection <- adj1 %*% adj1 # this give us a matrix containing in each cell the number of path of length 2 between the nodes of row i and column j, so basically the number of common neighbors between node i and node j
+  # we now have to obtain only the pairs that haven't already formed an edge, so we are interested only in pair that aren't connected in adj1 and check if they have formed a connection in adj2, we use com_connection to know how many common connection they have so to save them into the right column
+  pairs <- numeric(6) # the number of pair that have k connection in common in the first snapshot but are not directly connected by an edge
+  n <- nrow(adj1)
+  for(i in 1:(n-1)){
+    for(j in (i+1):n){
+      if(adj1[i,j]==0){  # if they don't have a connection in the first snaphshot
+        k <- com_connection[i,j]
+        if(k>5) # we group all the one with above 5 connection together
+          k <- 5
+        
+        pairs[[k+1]] <- pairs[[k+1]] + 1
+        if(adj2[i,j]==1)
+          T_k[i, k+1] <- T_k[i, k+1] + 1 # increase the function
+      }
     }
   }
 }
+T_k
+ecount(snap1)
+ecount(snap2)
+pairs
+T_k <- T_k / pairs
+T_k[1,]
 #}
 
 
