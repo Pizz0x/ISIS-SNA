@@ -1,5 +1,6 @@
 library(igraph)
 library(lubridate)
+library(dplyr)
 df <- read.csv("tweets.csv") # import the data
 head(df)  
 
@@ -354,19 +355,112 @@ V(net2)$community
 inv_weights <- 1 / E(net2)$weight
 
 centrality_df <- data.frame(
+  username = V(net2)$name,
   community = V(net2)$community,
   degree = degree(net2),
   strength = strength(net2, weights = E(net2)$weight),
   centrality = eigen_centrality(net2, weights = E(net2)$weight)$vector,  # how central a community is
   betweenness = betweenness(net2, weights = inv_weights), # how much a node control the flow of information
-  closeness = closeness(net2, weights = inv_weights),    # how fast a node can reach other nodes, the inverse of distances
+  closeness = closeness(net2, weights = inv_weights)    # how fast a node can reach other nodes, the inverse of distances
 )
 centrality_df
-aggregate(. ~ community, data = centrality_df, FUN = mean) # we check how the communities behave in the network
 
 # let's see the communities in a graph with a color for each of them:
-colorVals <- c("red", "blue", "yellow", "green", "violet", "darkgreen", "orange", "skyblue")
+colorVals <- c("firebrick3", "slateblue1", "yellow1", "olivedrab1", "pink", "seagreen1", "orange", "turquoise1")
 V(net2)$color <- colorVals[V(net2)$community]
 plot.igraph(net2, vertex.label = NA,layout=layout, vertex.size=5)
 
-# we can see that community 1 is the most important by every attributes, even community 2 and 3 are quite complete, let's analyze them in the specific
+# we can now check how the communities behave in the network: the community that are more influent
+aggregate(. ~ community, data = centrality_df[-1], FUN = mean)
+# we can see that the most important communities under every aspect are community 1, 2 and 3
+
+# let's see more in the detail the structure of the communities, we would like to know the density of the community, the triadic closure and the assortivity (if nodes tends to connect to similiar nodes)
+community_id <- unique(V(net2)$community)
+edge_density(net2, loops=F)
+density <- c()
+nnodes <- c()
+diameter <- c()
+transitivity <- c()
+for (i in community_id){
+  sub_net <- induced.subgraph(net2, V(net2)[community==i])
+  density <- c(density, edge_density(sub_net, loops=F))
+  nnodes <- c(nnodes, vcount(sub_net))
+  diameter <- c(diameter, length(get_diameter(sub_net)))
+  transitivity <- c(transitivity, transitivity(sub_net))
+}
+density # we can see that the density inside each community is significantly higher than in the general network, we can see that the communities 1-4 have a lower density but it's normal since the have more nodes
+nnodes # indeed having 20 nodes and a density of 0.15 means that the network is sparse but not a lot, indeed the diameter of the communities is around 5-6, we can say that the communities are sparse but definitely less than the network
+diameter
+transitivity
+# we are also curious about the assortativity per community : how much does nodes tend to connect to nodes that are of the same community
+assortativity_nominal(net2, types = as.factor(V(net2)$community), directed=F)
+# the value is positive, so we can say that there is the tendency of nodes to connect with other nodes of the same community
+# we can say that nodes interact more with nodes of the same community than with other nodes -> mentions are more common inside a community, probably information circles more inside each community, but to be sure of this let's see if the text of each community are distinct or similiar:
+
+
+# let's now see who are the users that are more important in each of these community:
+top_users <- centrality_df %>%
+  filter(community %in% c(1, 2, 3)) %>%
+  group_by(community) %>%
+  top_n(3, centrality) %>% 
+  arrange(community, desc(centrality))
+top_users
+
+# let's now see what this main communities talks about:
+head(tweets)
+# we already have a data frame containing the messagges and the users, we need to keep only the users that are in a community and specify the community of each user
+comtweets <- tweets %>% inner_join(centrality_df %>% select(username, community))
+head(comtweets)
+# now we are ready to look at the top 3 communities contents and see if there are differences, we just need to do the classic text and sentiment analysis:
+
+corpus = corpus(comtweets[comtweets$community==1,], text_field = "tweets")
+summary(corpus)
+doc.tokens = tokens(corpus) # tokenize the text (split each document into individual tokens)
+doc.tokens = tokens(doc.tokens, remove_punct = TRUE, remove_numbers = TRUE) # we remove punctuation and numbers from the token (they are noise)
+doc.tokens = tokens_select(doc.tokens, stopwords(language = "en", source = "snowball", simplify = TRUE), selection ='remove') # we remove common english words like "is", "the", "and"
+doc.tokens = tokens_tolower(doc.tokens) # convert all words to lower case, making analysis consistent
+doc.tokens <- tokens_keep(doc.tokens, pattern = "^[a-z]+$", valuetype = "regex") # we keep only tokens that are entirely lowercase alphabet characters
+
+toks_ngram = tokens_ngrams(doc.tokens, n = 2) # non only single words but also pairs of consecutive words, we now have a richer set of features than just individual words
+toks_ngram
+
+dfmat = dfm(toks_ngram) %>% dfm_trim(min_termfreq = 20) # this create a DFM (rows are the documents, columns are the features -> cells contains frequency of feature in a document) and we filter out rare terms (we only want terms with frequency > 10)
+dfmat
+
+library(quanteda.textplots)
+textplot_wordcloud(dfmat)
+
+library('syuzhet')  # use NRC Emotion Lexicon (list of words and their associations)
+sentiment = get_nrc_sentiment(comtweets[comtweets$community==1,]$tweets)
+td = data.frame(t(sentiment))
+td = data.frame(rowSums(td[-1]))
+names(td)[1] <- "count"
+tdw <- cbind("sentiment" = rownames(td), td)
+rownames(tdw) <- NULL
+tdw
+
+require("ggplot2")
+# Plot Emotions
+ggplot(tdw[1:8, ], aes(x = sentiment, y = count, fill = sentiment)) +
+  geom_bar(stat = "identity") +
+  labs(x = "emotion") +
+  theme(axis.text.x=element_text(angle=45, hjust=1), legend.title = element_blank())
+
+# let's see if they are the same of the main actor of this community or if he differ from the others:
+
+library('syuzhet')  # use NRC Emotion Lexicon (list of words and their associations)
+sentiment = get_nrc_sentiment(comtweets[comtweets$username=="mobi_ayubi",]$tweets)
+td = data.frame(t(sentiment))
+td = data.frame(rowSums(td[-1]))
+names(td)[1] <- "count"
+tdw <- cbind("sentiment" = rownames(td), td)
+rownames(tdw) <- NULL
+tdw
+
+require("ggplot2")
+# Plot Emotions
+ggplot(tdw[1:8, ], aes(x = sentiment, y = count, fill = sentiment)) +
+  geom_bar(stat = "identity") +
+  labs(x = "emotion") +
+  theme(axis.text.x=element_text(angle=45, hjust=1), legend.title = element_blank())
+
