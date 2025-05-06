@@ -343,15 +343,30 @@ ggplot(tdw[9:10, ], aes(x = sentiment, y = count, fill = sentiment)) +
 
 # Now that we have complete the analysis of the complete graph let's try to go a little more in the specific and do an analysis of the communities
 # let's now try to detect the communities -> disconnected parts of the graph
-w <- cluster_edge_betweenness(net2)
-sort(table(w$membership)) # vector that associate each node with a community that represent the nodes that interact with each other mostly.
-# we have 5 significant communities with 9 or more nodes, let's remake the graph with different color for each community -> graphical visualization:
-V(net2)$color <- rep("white", length(w$membership))
-keepTheseCommunities <- names(sizes(w))[sizes(w) > 4]
-matchIndex <- match(w$membership, keepTheseCommunities) # like %in%
-colorVals <- rainbow(10)[matchIndex[!is.na(matchIndex)]]
-V(net2)$color[!is.na(matchIndex)] <- colorVals
-plot.igraph(net2, vertex.label = NA,layout=layout, vertex.size=5)
+
 # thanks to community, it's possible to do an analysis of the content for each community or check the community over time to see if they change or not
 
 
+communities <- multilevel.community(net2, weights = E(net2)$weight) # create community based on the strength of ties, in this way we group strong mutual connections more tightly
+communities
+V(net2)$community <- membership(communities)
+V(net2)$community
+inv_weights <- 1 / E(net2)$weight
+
+centrality_df <- data.frame(
+  community = V(net2)$community,
+  degree = degree(net2),
+  strength = strength(net2, weights = E(net2)$weight),
+  centrality = eigen_centrality(net2, weights = E(net2)$weight)$vector,  # how central a community is
+  betweenness = betweenness(net2, weights = inv_weights), # how much a node control the flow of information
+  closeness = closeness(net2, weights = inv_weights),    # how fast a node can reach other nodes, the inverse of distances
+)
+centrality_df
+aggregate(. ~ community, data = centrality_df, FUN = mean) # we check how the communities behave in the network
+
+# let's see the communities in a graph with a color for each of them:
+colorVals <- c("red", "blue", "yellow", "green", "violet", "darkgreen", "orange", "skyblue")
+V(net2)$color <- colorVals[V(net2)$community]
+plot.igraph(net2, vertex.label = NA,layout=layout, vertex.size=5)
+
+# we can see that community 1 is the most important by every attributes, even community 2 and 3 are quite complete, let's analyze them in the specific
