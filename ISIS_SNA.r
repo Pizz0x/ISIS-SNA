@@ -102,23 +102,10 @@ plot(net2, edge.arrow.size=.1, edge.curved=.1, layout=layout, vertex.label=NA)
 # Which are the most useful users to the graph connection?
 sort(betweenCent,decreasing=TRUE)[1:10]
 
-# let's now try to detect the communities -> disconnected parts of the graph
-w <- cluster_edge_betweenness(net2)
-sort(table(w$membership)) # vector that associate each node with a community that represent the nodes that interact with each other mostly.
-# we have 5 significant communities with 9 or more nodes, let's remake the graph with different color for each community -> graphical visualization:
-V(net2)$color <- rep("white", length(w$membership))
-keepTheseCommunities <- names(sizes(w))[sizes(w) > 4]
-matchIndex <- match(w$membership, keepTheseCommunities) # like %in%
-colorVals <- rainbow(10)[matchIndex[!is.na(matchIndex)]]
-V(net2)$color[!is.na(matchIndex)] <- colorVals
-plot.igraph(net2, vertex.label = NA,layout=layout, vertex.size=5)
-# thanks to community, it's possible to do an analysis of the content for each community or check the community over time to see if they change or not
-
 
 # we now want to do a temporal analysis on the connections, specifically we want to check for triadic closures:
-# How much more likely is a link to form between two people in a social network if they already have a connection in common?
 # if A is friend with B and B is friend with C, then A tend to become friend with C
-# we want to calculate the number of triangles that will create over time and the probability of triadic closure, how many open triads become close triads.
+# At first we want to calculate the number of triangles that will create over time and the probability of triadic closure, how many open triads become close triads.
 
 # first we need to sort the data set based on the timestamp:
 class(df$time) # we want a datatime value not character
@@ -217,6 +204,7 @@ plot(months, triangles_over_time, type = "b", col = "blue",
 
 
 
+# How much more likely is a link to form between two people in a social network if they already have a connection in common?
 # we want now to check if a connection is created more probably if there is already a common connection -> so if the network evolve more thanks to triadic closure or new casual connection.
 # to do this we will track link formation, from a snapshot to another we will:
 # - identify the pairs of nodes that have k connection in common in the first snapshot but are not directly connected by an edge
@@ -224,7 +212,8 @@ plot(months, triangles_over_time, type = "b", col = "blue",
 # we will then plot T as a function to illustrate the effect of common friends on the formation of links
 
 T_k <- matrix(0, nrow = length(months)-1, ncol = 2) # when k is 5 and above in just one column
-
+T_k_frac <- matrix(0, nrow = length(months)-1, ncol = 2)
+pairs <- matrix(0, nrow = length(months)-1, ncol=2)
 for (m in 1:(length(months)-1)){
   snap1 <- graph_list[[months[m]]]
   snap2 <- graph_list[[months[m+1]]]
@@ -233,7 +222,6 @@ for (m in 1:(length(months)-1)){
   # first we get the common connections between each pair of nodes 
   com_connection <- adj1 %*% adj1 # this give us a matrix containing in each cell the number of path of length 2 between the nodes of row i and column j, so basically the number of common neighbors between node i and node j
   # we now have to obtain only the pairs that haven't already formed an edge, so we are interested only in pair that aren't connected in adj1 and check if they have formed a connection in adj2, we use com_connection to know how many common connection they have so to save them into the right column
-  pairs <- numeric(2) # the number of pair that have k connection in common in the first snapshot but are not directly connected by an edge
   n <- nrow(adj1)
   for(i in 1:(n-1)){
     for(j in (i+1):n){
@@ -242,24 +230,33 @@ for (m in 1:(length(months)-1)){
         if(k>1) # we group all the one with above 5 connection together
           k <- 1
         
-        pairs[[k+1]] <- pairs[[k+1]] + 1
+        pairs[m,k+1] <- pairs[m,k+1] + 1
         if(adj2[i,j]==1)
           T_k[m, k+1] <- T_k[m, k+1] + 1 # increase the function
       }
     }
   }
-  T_k[m,] <- T_k[m,] / pairs
+  T_k_frac[m,] <- T_k[m,] / pairs[m,]
 }
+# at this point we have a matrix containing the number of connection created every month where there is a common neighbor or not, the number of pair that are not connected by an edge that have a common neighbor or not and the fraction T_k for each month
+barplot(t(T_k), names.arg=months[-1], col=c("red", "blue"), legend.text = c("0 common neighbor", "≥1 common neighbor"))
+# since we have that in the first few months less connection were made, but the number of possible connection was quite the same, it makes more sense not to do the mean of the months but to sum up the connection made and the not connected pair for each month and then at that point look at the total fraction.
+# I decided to do this because low activity months can distort the average if we take the mean, but if we sum numerator and denominators across all months we get a more robust estimator that reflect the actual volume of link formation.
 T_k
-t_k <- colMeans(T_k, na.rm = TRUE)
-t_k
-k_values <- c("0", "1")
-k_values
+pairs
+T_k_tot <- colSums(T_k)
+# since we are calculating the total opportunity over time, we will sum up the denominator, this is because in every month the pairs had the possibility to connect
+# in this way we respond to the question: out of all the times a connection could have formed, how often did it actually form across the months?
+pairs_tot <- colSums(pairs)
+T_k_tot # total number of connection created where there is at least a common neighbor or not
+pairs_tot # total number of pairs that can create a connection during the months, so each pair that did not create a connection is retake for the sum each month
+T_k_tot <- T_k_tot / pairs_tot
+T_k_tot
 
-plot(k_values, t_k, type = "b", pch = 16, col = "blue",
-     xlab = "Grado k", ylab = "t(k)",
-     main = "Triadic Closure con barre di errore")
-# we can see that indeed the triadic closure means a lot in the formation of a connection: when 2 nodes had 0 connection in common at the beginning of a month, the probabilty for them to create a connection in that month was on average 0.007 meanwhile when they had 1 or more connection in common, the number increase a lot
+barplot(T_k_tot, beside=T, names.arg=c("0 common neighbors", "≥1 common neighbors"), main = "T(k) per month",
+        ylab = "Probability of nodes connection", col=c("red", "blue"))
+
+# we can see that indeed the triadic closure means a lot in the formation of a connection: when 2 nodes had 0 connection in common at the beginning of a month, the probabilty for them to create a connection in that month was on average 0.007 meanwhile when they had 1 or more connection in common, the probability is doubled
 
 
 
@@ -339,5 +336,22 @@ ggplot(tdw[9:10, ], aes(x = sentiment, y = count, fill = sentiment)) +
   labs(x = "polarity") +
   theme(axis.text.x=element_text(angle=45, hjust=1), legend.title = element_blank())
 
+
+
+
+
+
+# Now that we have complete the analysis of the complete graph let's try to go a little more in the specific and do an analysis of the communities
+# let's now try to detect the communities -> disconnected parts of the graph
+w <- cluster_edge_betweenness(net2)
+sort(table(w$membership)) # vector that associate each node with a community that represent the nodes that interact with each other mostly.
+# we have 5 significant communities with 9 or more nodes, let's remake the graph with different color for each community -> graphical visualization:
+V(net2)$color <- rep("white", length(w$membership))
+keepTheseCommunities <- names(sizes(w))[sizes(w) > 4]
+matchIndex <- match(w$membership, keepTheseCommunities) # like %in%
+colorVals <- rainbow(10)[matchIndex[!is.na(matchIndex)]]
+V(net2)$color[!is.na(matchIndex)] <- colorVals
+plot.igraph(net2, vertex.label = NA,layout=layout, vertex.size=5)
+# thanks to community, it's possible to do an analysis of the content for each community or check the community over time to see if they change or not
 
 
