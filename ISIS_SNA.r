@@ -1,6 +1,13 @@
 library(igraph)
 library(lubridate)
 library(dplyr)
+library('syuzhet')
+require("ggplot2")
+library(quanteda)
+library(quanteda.textstats)
+library(quanteda.textplots)
+library(circlize)
+  
 df <- read.csv("tweets.csv") # import the data
 head(df)  
 
@@ -45,20 +52,21 @@ net <- graph_from_data_frame(d=mention_counts, vertices = usernames, directed=T)
 net <- simplify(net, remove.loops=T)
 V(net)$size <- 5
 l <- layout.fruchterman.reingold(net)
-E(net)$width <- E(net)$weight/50
+E(net)$width <- ((E(net)$weight)^(1/4))/3
+
 plot(net, edge.arrow.size=.1, edge.curved=.1, layout=l, vertex.label=NA)
 
 # We can now get some information about the data:
 
 # Node degree:
-deg <- degree(net, mode="in") # Node degree -> most mentioned nodes on the social
+deg <- igraph::degree(net, mode="in") # Node degree -> most mentioned nodes on the social
 plot(net, edge.arrow.size=.1, edge.curved=.1, layout=l, vertex.label=NA, vertex.size=deg/3+3)
 hist(deg, breaks=1:vcount(net)-1, main="Histogram of Node Degree") 
 deg.dist <- degree_distribution(net, cumulative=T, mode="in")
 plot( x=0:max(deg), y=1-deg.dist, pch=19, cex=1.2, col="orange", xlab="Degree", ylab="Cumulative Frequency")
 # we can see that most of the nodes are not mentioned, but can still mention other nodes, so let's also see the out-degree
 
-deg <- degree(net, mode="out") # Node degree -> most active nodes on the social
+deg <- igraph::degree(net, mode="out") # Node degree -> most active nodes on the social
 plot(net, edge.arrow.size=.1, edge.curved=.1, layout=l, vertex.label=NA, vertex.size=deg/3+3)
 hist(deg, breaks=1:vcount(net)-1, main="Histogram of Node Degree")
 
@@ -68,11 +76,12 @@ dyad_census(net) # we can say that out network is definitely sparse
 
 
 # Let's get some more insight of the network, but first it's better to remove the nodes that do not appear in the edge table since they are not relevant for this part of the analysis
-und_net <- graph_from_data_frame(d=mention_counts, vertices = usernames, directed=F)
+# we transform the graph net to undirected, in this operation it's important to sum the weights of edges (a,c) (c,a) to have a single edge per connection
+und_net <- as.undirected(net, mode = "collapse", edge.attr.comb = list(weight = "sum"))
 und_net <- simplify(und_net, remove.loops=T)
 E(und_net)$width <- E(und_net)$weight/50
 V(und_net)$size <- 5
-net2 <- und_net - V(und_net)[degree(und_net, mode="all")==0]
+net2 <- und_net - V(und_net)[igraph::degree(und_net, mode="all")==0]
 layout <- layout.fruchterman.reingold(net2)
 plot(net2, edge.arrow.size=.1, edge.curved=.1, layout=layout, vertex.label=NA) # in this way we also get a cleaner graph
 plot(net2, edge.arrow.size=.1, edge.curved=.1, layout=layout_in_circle, vertex.label=NA)
@@ -152,11 +161,9 @@ for (m in months){
   # create the new edges
   if(length(edges) > 0){
     new_edges <- matrix(edges, ncol=2, byrow=T)
-    #new_nodes <- setdiff(unique(c(new_edges)), V(net)$name)
-    #if (length(new_nodes) > 0) {
-    #  net <- add_vertices(net, length(new_nodes), name=new_nodes)
-    #}
-    for (i in 1:nrow(new_edges)){  # we add the edge only if it is not a loop(mention to itself), we do this because this type of connection are not useful for our research. and if it wasn't already in the graph, we are interested in the single connection, if there are more we can use it to distinguish strong and weak ties
+    for (i in 1:nrow(new_edges)){
+      # we add the edge only if it is not a loop(mention to itself), we do this because this type of connection are not useful for our research. 
+      # we add an edge only if it wasn't already in the graph, we are interested in the single connection not in weights
       if(new_edges[i,1] != new_edges[i,2] && !are.connected(net3, new_edges[i,1], new_edges[i,2]))
         net3 <- add_edges(net3, c(new_edges[i,1], new_edges[i,2]))
         
@@ -166,7 +173,7 @@ for (m in months){
   triangles <- sum(count_triangles(net3))/3
   triangles_over_time <- c(triangles_over_time, triangles)
   # calculate the number of open triangles -> we have 2 of the 3 edges already and we want to close it so add the remaining edge
-  deg <- degree(net3)
+  deg <- igraph::degree(net3)
   open_triangles <- sum(deg * (deg-1) / 2) # sum of possible combination for each vertex
   if(open_triangles > 0)
     closure_prob <- sum(count_triangles(net3)) / open_triangles # the number of closure triadic compared to the number of possible triadic
@@ -199,9 +206,12 @@ plot(
 triangles_over_time
 opt
 closure_prob_ot
-
-plot(months, triangles_over_time, type = "b", col = "blue",
-     xlab = "Mese", ylab = "Triangoli (Triadic Closure)", main = "Evoluzione del Triadic Closure")
+nmonths <- factor(months, levels = c("2015-09", "2015-10", "2015-11", "2015-12", "2016-01", "2016-02", "2016-03", "2016-04", "2016-05"), ordered=T)
+par(mfrow=c(1,2))
+plot(nmonths, triangles_over_time, type = "a", col = "blue",
+     xlab = "Month", ylab = "Triadic Closure", main = "Evolution of Triadic Closure")
+plot(nmonths, triangles_over_time, type = "a", col = "blue",
+     xlab = "Month", ylab = "Closure Probability", main = "Evolution of Closure Probability")
 
 
 
@@ -262,7 +272,6 @@ barplot(T_k_tot, beside=T, names.arg=c("0 common neighbors", "≥1 common neighb
 
 
 # we are now interested in the most used words in the tweets of the ISIS fan, so from the starting dataset, we are interested in the fields tweet
-library(quanteda)
 
 tweets <- df[, c("username", "tweets")]
 # we are interested only on the message in the tweet, not to link or mentions
@@ -287,12 +296,11 @@ toks_ngram
 dfmat = dfm(toks_ngram) %>% dfm_trim(min_termfreq = 20) # this create a DFM (rows are the documents, columns are the features -> cells contains frequency of feature in a document) and we filter out rare terms (we only want terms with frequency > 10)
 dfmat
 
-library(quanteda.textstats)
+
 features_dfm = textstat_frequency(dfmat, n = 100)
 features_dfm$feature = with(features_dfm, reorder(feature, -frequency))
 features_dfm
 
-library(quanteda.textplots)
 textplot_wordcloud(dfmat)
 
 # we now want to check the most used hashtags
@@ -315,7 +323,7 @@ textplot_wordcloud(dfmat2)
 
 # Sentiment Analysis
 
-library('syuzhet')  # use NRC Emotion Lexicon (list of words and their associations)
+# use NRC Emotion Lexicon (list of words and their associations)
 sentiment = get_nrc_sentiment(tweets$tweets)
 td = data.frame(t(sentiment))
 td = data.frame(rowSums(td[-1]))
@@ -324,7 +332,7 @@ tdw <- cbind("sentiment" = rownames(td), td)
 rownames(tdw) <- NULL
 tdw
 
-require("ggplot2")
+
 # Plot Emotions
 ggplot(tdw[1:8, ], aes(x = sentiment, y = count, fill = sentiment)) +
   geom_bar(stat = "identity") +
@@ -397,67 +405,89 @@ assortativity_nominal(net2, types = as.factor(V(net2)$community), directed=F)
 # the value is positive, so we can say that there is the tendency of nodes to connect with other nodes of the same community
 # we can say that nodes interact more with nodes of the same community than with other nodes -> mentions are more common inside a community, probably information circles more inside each community, but to be sure of this let's see if the text of each community are distinct or similiar:
 
-
-# let's now see who are the users that are more important in each of these community:
-top_users <- centrality_df %>%
-  filter(community %in% c(1, 2, 3)) %>%
-  group_by(community) %>%
-  top_n(3, centrality) %>% 
-  arrange(community, desc(centrality))
-top_users
-
-# let's now see what this main communities talks about:
 head(tweets)
 # we already have a data frame containing the messagges and the users, we need to keep only the users that are in a community and specify the community of each user
 comtweets <- tweets %>% inner_join(centrality_df %>% select(username, community))
 head(comtweets)
 # now we are ready to look at the top 3 communities contents and see if there are differences, we just need to do the classic text and sentiment analysis:
+community_ngrams <- list()
+dfmat_coms <- list()
+community_id <- unique(comtweets$community)
+for (i in community_id){
+  corpus = corpus(comtweets[comtweets$community==i,], text_field = "tweets")
+  summary(corpus)
+  doc.tokens = tokens(corpus) # tokenize the text (split each document into individual tokens)
+  doc.tokens = tokens(doc.tokens, remove_punct = TRUE, remove_numbers = TRUE) # we remove punctuation and numbers from the token (they are noise)
+  doc.tokens = tokens_select(doc.tokens, stopwords(language = "en", source = "snowball", simplify = TRUE), selection ='remove') # we remove common english words like "is", "the", "and"
+  doc.tokens = tokens_tolower(doc.tokens) # convert all words to lower case, making analysis consistent
+  doc.tokens <- tokens_keep(doc.tokens, pattern = "^[a-z]+$", valuetype = "regex") # we keep only tokens that are entirely lowercase alphabet characters
+  
+  community_ngrams[[i]] <- tokens_ngrams(doc.tokens, n = 2) # non only single words but also pairs of consecutive words, we now have a richer set of features than just individual words
+  dfmat_coms[[i]] <- dfm(community_ngrams[[i]]) %>% dfm_trim(min_termfreq = 20)
+}
+textplot_wordcloud(dfmat_coms[[1]])
 
-corpus = corpus(comtweets[comtweets$community==1,], text_field = "tweets")
-summary(corpus)
-doc.tokens = tokens(corpus) # tokenize the text (split each document into individual tokens)
-doc.tokens = tokens(doc.tokens, remove_punct = TRUE, remove_numbers = TRUE) # we remove punctuation and numbers from the token (they are noise)
-doc.tokens = tokens_select(doc.tokens, stopwords(language = "en", source = "snowball", simplify = TRUE), selection ='remove') # we remove common english words like "is", "the", "and"
-doc.tokens = tokens_tolower(doc.tokens) # convert all words to lower case, making analysis consistent
-doc.tokens <- tokens_keep(doc.tokens, pattern = "^[a-z]+$", valuetype = "regex") # we keep only tokens that are entirely lowercase alphabet characters
+# use NRC Emotion Lexicon (list of words and their associations)
+tdw_coms <- list()
+for (i in community_id){
+  sentiment = get_nrc_sentiment(comtweets[comtweets$community==i,]$tweets)
+  td = data.frame(t(sentiment))
+  td = data.frame(rowSums(td[-1]))
+  names(td)[1] <- "count"
+  tdw <- cbind("sentiment" = rownames(td), td)
+  rownames(tdw) <- NULL
+  tdw_coms[[i]] <-tdw
+}
 
-toks_ngram = tokens_ngrams(doc.tokens, n = 2) # non only single words but also pairs of consecutive words, we now have a richer set of features than just individual words
-toks_ngram
 
-dfmat = dfm(toks_ngram) %>% dfm_trim(min_termfreq = 20) # this create a DFM (rows are the documents, columns are the features -> cells contains frequency of feature in a document) and we filter out rare terms (we only want terms with frequency > 10)
-dfmat
-
-library(quanteda.textplots)
-textplot_wordcloud(dfmat)
-
-library('syuzhet')  # use NRC Emotion Lexicon (list of words and their associations)
-sentiment = get_nrc_sentiment(comtweets[comtweets$community==1,]$tweets)
-td = data.frame(t(sentiment))
-td = data.frame(rowSums(td[-1]))
-names(td)[1] <- "count"
-tdw <- cbind("sentiment" = rownames(td), td)
-rownames(tdw) <- NULL
-tdw
-
-require("ggplot2")
 # Plot Emotions
 ggplot(tdw[1:8, ], aes(x = sentiment, y = count, fill = sentiment)) +
   geom_bar(stat = "identity") +
   labs(x = "emotion") +
   theme(axis.text.x=element_text(angle=45, hjust=1), legend.title = element_blank())
 
-# let's see if they are the same of the main actor of this community or if he differ from the others:
 
-library('syuzhet')  # use NRC Emotion Lexicon (list of words and their associations)
-sentiment = get_nrc_sentiment(comtweets[comtweets$username=="mobi_ayubi",]$tweets)
-td = data.frame(t(sentiment))
-td = data.frame(rowSums(td[-1]))
-names(td)[1] <- "count"
-tdw <- cbind("sentiment" = rownames(td), td)
-rownames(tdw) <- NULL
-tdw
+# let's now see who are the users that are more important in each of these community:
 
-require("ggplot2")
+top_users <- centrality_df %>%
+  filter(community %in% c(1, 2, 3)) %>%
+  group_by(community) %>%
+  top_n(2, centrality) %>% 
+  arrange(community, desc(centrality))
+top_users
+users_id <- top_users$username
+
+# let's see if what they say and the emotions they transmit are the same of their community or if they differ from it, this is also a way to see if there is some type of homophily and social influence in the communities:
+
+users_ngrams <- list()
+dfmat_users <- list()
+for (i in users_id){
+  corpus = corpus(comtweets[comtweets$username==i,], text_field = "tweets")
+  summary(corpus)
+  doc.tokens = tokens(corpus) # tokenize the text (split each document into individual tokens)
+  doc.tokens = tokens(doc.tokens, remove_punct = TRUE, remove_numbers = TRUE) # we remove punctuation and numbers from the token (they are noise)
+  doc.tokens = tokens_select(doc.tokens, stopwords(language = "en", source = "snowball", simplify = TRUE), selection ='remove') # we remove common english words like "is", "the", "and"
+  doc.tokens = tokens_tolower(doc.tokens) # convert all words to lower case, making analysis consistent
+  doc.tokens <- tokens_keep(doc.tokens, pattern = "^[a-z]+$", valuetype = "regex") # we keep only tokens that are entirely lowercase alphabet characters
+  
+  users_ngrams[[i]] <- tokens_ngrams(doc.tokens, n = 2) # non only single words but also pairs of consecutive words, we now have a richer set of features than just individual words
+  dfmat_users[[i]] <- dfm(users_ngram[[i]]) %>% dfm_trim(min_termfreq = 20)
+}
+
+textplot_wordcloud(dfmat_users[1])
+
+# use NRC Emotion Lexicon (list of words and their associations)
+tdw_users <- list()
+for (i in users_id){
+  sentiment = get_nrc_sentiment(comtweets[comtweets$username==i,]$tweets)
+  td = data.frame(t(sentiment))
+  td = data.frame(rowSums(td[-1]))
+  names(td)[1] <- "count"
+  tdw <- cbind("sentiment" = rownames(td), td)
+  rownames(tdw) <- NULL
+  tdw_users[[i]] <- tdw
+}
+
 # Plot Emotions
 ggplot(tdw[1:8, ], aes(x = sentiment, y = count, fill = sentiment)) +
   geom_bar(stat = "identity") +
