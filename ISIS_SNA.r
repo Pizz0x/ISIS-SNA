@@ -1,189 +1,218 @@
+# ISIS SOCIAL NETWORK ANALYSIS
+
+# 1. importo le librerie necessarie per il progetto
 library(igraph)
 library(lubridate)
 library(dplyr)
 library('syuzhet')
 require("ggplot2")
 library(quanteda)
+library(tidyr)
 library(quanteda.textstats)
 library(quanteda.textplots)
-library(circlize)
-  
-df <- read.csv("tweets.csv") # import the data
+library(gridExtra)
+
+# 2. importo il dataset da un file CSV
+df <- read.csv("tweets.csv")
 head(df)  
 
-# for the initial graph we are interested in connection between people, so we will create a directed graph
-# where an edge exit from a node in case of a mention or retweet to another member
-# so we need to create edge that goes from a user to another if the second user is cited with @*username* by the first 
+# ******************************************************************************
+
+## CREAZIONE DELLA RETE
+
+# 3. i vertici del grafo sono gli utenti
 usernames <- unique(df$username)
 
 results <- list()
 row_index <- 1
-# get a list of pair: user that mention, user mentioned
+# ciclo for utilizzato per ottenere gli archi della rete che corrispondono alle menzioni
 for (i in 1:nrow(df)) { 
+  # l'utente che menziona
   from_user <- df$username[i]
   tweet_text <- df$tweets[i]
-  
+  # vettore di utenti menzioni presenti in un messaggio, li ottengo selezionando le stringhe composte da @*username*
   mentions <- regmatches(tweet_text, gregexpr("@\\w+", tweet_text))[[1]] # get the string in the text that are composed by @*username* 
   
   if (length(mentions) > 0) {
     for (mention in mentions) {
-      to_user <- sub("@", "", mention)  # remove the @ from the username
-      if(to_user %in% usernames)  #  save only if the mentioned user is in our data set
+      to_user <- sub("@", "", mention)  # rimuovo la @ dall'username
+      if(to_user %in% usernames)  #  salvo solo gli utenti menzionati che sono inclusi nel dataset
       results[[row_index]] <- data.frame(from = from_user, to = to_user, stringsAsFactors = FALSE)
       row_index <- row_index + 1
     }
   }
 }
-
-mentions <- do.call(rbind, results) # transform the list of dataframe in a dataframe
+# 4. trasformo la lista di dataframe in un dataframe singolo
+mentions <- do.call(rbind, results) 
 head(mentions)
-users <- unique(c(mentions$from, mentions$to)) # list of users mentioned in the edges (we need it later)
-# now we have our list of mentions, let's transform it into a weighted edge list:
+users <- unique(c(mentions$from, mentions$to)) # lista di utenti menzionati negli archi (servirà per l'analisi temporale)
 
+# conto le coppie: utente che menziona, utente menzionato per rendere gli archi pesati
 mention_counts <- as.data.frame(table(mentions$from, mentions$to), stringsAsFactors = FALSE)
 colnames(mention_counts) <- c("from", "to", "weight")
 
-mention_counts <- mention_counts[mention_counts$weight > 0, ]
+mention_counts <- mention_counts[mention_counts$weight > 0, ] # rimuovo le coppie con peso 0
 head(mention_counts)
 
-# now we have all we need to create our first graph
+# 5. ora abbiamo tutto il necessario per la creazione del grafo diretto (il primo grafo)
 
 net <- graph_from_data_frame(d=mention_counts, vertices = usernames, directed=T)
 net <- simplify(net, remove.loops=T)
 V(net)$size <- 5
 l <- layout.fruchterman.reingold(net)
-E(net)$width <- ((E(net)$weight)^(1/4))/3
+E(net)$width <- ((E(net)$weight)^(2/3))/3
 
 plot(net, edge.arrow.size=.1, edge.curved=.1, layout=l, vertex.label=NA)
+title("Grafo diretto completo")
 
-# We can now get some information about the data:
+# ******************************************************************************
 
-# Node degree:
-deg <- igraph::degree(net, mode="in") # Node degree -> most mentioned nodes on the social
-plot(net, edge.arrow.size=.1, edge.curved=.1, layout=l, vertex.label=NA, vertex.size=deg/3+3)
-hist(deg, breaks=1:vcount(net)-1, main="Histogram of Node Degree") 
-deg.dist <- degree_distribution(net, cumulative=T, mode="in")
-plot( x=0:max(deg), y=1-deg.dist, pch=19, cex=1.2, col="orange", xlab="Degree", ylab="Cumulative Frequency")
-# we can see that most of the nodes are not mentioned, but can still mention other nodes, so let's also see the out-degree
+# ANALISI STRUTTURALE DELLA RETE
+# 6. 
+vcount(net) # numero di vertici
+ecount(net) # numero di archi
 
-deg <- igraph::degree(net, mode="out") # Node degree -> most active nodes on the social
-plot(net, edge.arrow.size=.1, edge.curved=.1, layout=l, vertex.label=NA, vertex.size=deg/3+3)
-hist(deg, breaks=1:vcount(net)-1, main="Histogram of Node Degree")
-
-# It can be interesting to measure also reciprocity, so the proportion of reciprocated ties
+# densità dei nodi
+edge_density(net)
+# numero di nodi connessi mutuali e singole
+dyad_census(net)
+# la proporzione di connessioni mutuali in confronto alle singole
 reciprocity(net)
-dyad_census(net) # we can say that out network is definitely sparse
 
+# Grado dei nodi:
 
-# Let's get some more insight of the network, but first it's better to remove the nodes that do not appear in the edge table since they are not relevant for this part of the analysis
-# we transform the graph net to undirected, in this operation it's important to sum the weights of edges (a,c) (c,a) to have a single edge per connection
-und_net <- as.undirected(net, mode = "collapse", edge.attr.comb = list(weight = "sum"))
+# 7. Incoming -> i nodi più menzionati nella rete sociale
+par(mfrow=c(1,2))
+indeg <- igraph::degree(net, mode="in") 
+plot(net, edge.arrow.size=.1, edge.curved=.1, layout=l, vertex.label=NA, vertex.size=indeg/3+3)
+hist(indeg, breaks=1:vcount(net)-1, main="Distribuzione Grado in Entrata",xlab = "Grado in entrata", ylab = "Frequenza") 
+# I nodi con grado entrante maggiore
+sorted_indeg <- sort(indeg, decreasing = TRUE)
+head(sorted_indeg, 10)
+
+# 8. Outgoing -> i nodi più attivi nella rete sociale
+outdeg <- igraph::degree(net, mode="out") 
+plot(net, edge.arrow.size=.1, edge.curved=.1, layout=l, vertex.label=NA, vertex.size=outdeg/3+3)
+hist(outdeg, breaks=1:vcount(net)-1, main="Distribuzione Grado in Uscita",xlab = "Grado in uscita", ylab = "Frequenza") 
+# I nodi con grado uscente maggiore
+sorted_outdeg <- sort(outdeg, decreasing = TRUE)
+head(sorted_outdeg, 10)
+
+# ******************************************************************************
+
+# CENTRALITÀ DEI NODI
+
+# 9. creazione grafo indiretto senza utenti isolati (secondo grafo)
+und_net <- as.undirected(net, mode = "collapse", edge.attr.comb = list(weight = "sum")) # l'ultimo parametro serve per sommare i pesi di (a,c) e (c,a) dato che il grafo è indiretto  
 und_net <- simplify(und_net, remove.loops=T)
 E(und_net)$width <- E(und_net)$weight/50
 V(und_net)$size <- 5
-net2 <- und_net - V(und_net)[igraph::degree(und_net, mode="all")==0]
+net2 <- und_net - V(und_net)[igraph::degree(und_net, mode="all")==0] # rimuovo i nodi isolati
 layout <- layout.fruchterman.reingold(net2)
-plot(net2, edge.arrow.size=.1, edge.curved=.1, layout=layout, vertex.label=NA) # in this way we also get a cleaner graph
-plot(net2, edge.arrow.size=.1, edge.curved=.1, layout=layout_in_circle, vertex.label=NA)
-plot(net2, edge.arrow.size=.1, edge.curved=.1, layout=layout_randomly, vertex.label=NA)
+par(mfrow=c(1,1))
+plot(net2, edge.arrow.size=.1, edge.curved=.1, layout=layout, vertex.label=NA)
 
-
-# since our network is basically a citation network, we can measure the centrality of the graph and see the most important vertex of the graph
-# we will at first measure eigen centrality, that is a refinement that assigns higher weight to vertex for being connected to vertices which are themselves important
+# 10. Eigenvector Centrality
 eigenCent <- eigen_centrality(net2)$vector
-# let's plot the score on the graph:
+# visualiziamo i punteggi dei nodi in un grafo dove un colore più scuro implica un punteggio più elevato
 bins <- unique(quantile(eigenCent, seq(0,1,length.out=15)))
 vals <- cut(eigenCent, bins, labels=FALSE, include.lowest=TRUE)
 my_col = heat.colors(length(bins))
 colorVals <- rev(my_col)[vals]
 V(net2)$color <- colorVals
 plot(net2, edge.arrow.size=.1, edge.curved=.1, layout=layout, vertex.label=NA)
-# so who are the more relevant user?
+# utenti con punteggio di eigenvector centrality più alto
 sort(eigenCent,decreasing=TRUE)[1:10]
 
-# we will now measure betweenness centrality, to see which are the vertices that connect important parts of the graph
+# 11. Betweenness Centrality
 betweenCent <- betweenness(net2)
+# correlazione tra i 2 tipi di centralità
 cor(betweenCent,eigenCent)
+# visualiziamo i punteggi dei nodi in un grafo dove un colore più scuro implica un punteggio più elevato
 bins <- unique(quantile(betweenCent, seq(0,1,length.out=30)))
 vals <- cut(betweenCent, bins, labels=FALSE, include.lowest=TRUE)
 colorVals <- rev(heat.colors(length(bins)))[vals]
 V(net2)$color <- colorVals
 plot(net2, edge.arrow.size=.1, edge.curved=.1, layout=layout, vertex.label=NA)
-# Which are the most useful users to the graph connection?
+# utenti con punteggio di betweenness centrality più alto
 sort(betweenCent,decreasing=TRUE)[1:10]
 
+# ******************************************************************************
 
-# we now want to do a temporal analysis on the connections, specifically we want to check for triadic closures:
-# if A is friend with B and B is friend with C, then A tend to become friend with C
-# At first we want to calculate the number of triangles that will create over time and the probability of triadic closure, how many open triads become close triads.
+# ANALISI TEMPORALE
 
-# first we need to sort the data set based on the timestamp:
-class(df$time) # we want a datatime value not character
+# 12. trasformo il tipo della variabile da carattere a data, in questo modo posso ordinare il dataframe per dataclass(df$time)
 df$time <- mdy_hm(df$time)
 class(df$time)
-sorted_df <- df[order(df$time),]
+sorted_df <- df[order(df$time),] # ordino il dataset per datetime di pubblicazione del tweet
 
-# now we want to create the graph progressively by the time, the idea is, since the graph is quite sparse, to see how it evolve month by month
-df$month <- format(df$time, "%Y-%m") # to do this we need a new column -> month
-net3 <- make_empty_graph(directed=F) # start from an empty graph
+# 13. essendo che misuriamo come cambia la rete mese dopo mese, abbiamo bisogno di una variabile month nel dataframe
+df$month <- format(df$time, "%Y-%m")
+# net3 è la variabile che rappresenta l'evoluzione del grafo mese per mese
+net3 <- make_empty_graph(directed=F) # inizia da un grafo vuoto composto solo dai vertici
 net3 <- add_vertices(net3, length(users), name=users)
-layout2 <- layout_on_sphere(net3)
-#layout <- layout_in_circle(net)
-# and for each month, we add the edges for the monthly tweets, measure the number of triadic closure and update the graph
+layout2 <- layout_on_sphere(net3) 
+# variabili utilizzate per misurare il numero di chiusure triadiche, probabilità di chiusura e il numero di possibili triangoli (2 lati su 3 presenti)
 triangles_over_time <- c()
 closure_prob_ot <- c()
 opt <- c()
+# lista dei grafi mese per mese
 graph_list <- list()
 months <- sort(unique(df$month))
+# considero solo gli ultimi mesi in quanto il dataset diventa significativo dopo l'attentato di parigi
 months <- months[-c(1,2,3,4,5,6,7,8)]
 months
 par(mfrow=c(3,3))
 
+# 14. ciclo di computazione usato per ottenere : probabilità di chiusura triadica e visualizzazione della rete mese per mese
 for (m in months){
+  # prendo in considerazione soltanto i tweet del mese m
   df_month <- df[df$month == m, ]
   
-  # this part is the same as before to create the edges:
+  # stessa funzione utilizzata per la creazione delle menzioni ad inizio file
   edges <- c()
   for (i in 1:nrow(df_month)) { 
     from_user <- df_month$username[i]
     tweet_text <- df_month$tweets[i]
     
-    mentions <- regmatches(tweet_text, gregexpr("@\\w+", tweet_text))[[1]] # get the string in the text that are composed by @*username* 
+    mentions <- regmatches(tweet_text, gregexpr("@\\w+", tweet_text))[[1]]
     
     if (length(mentions) > 0) {
       for (mention in mentions) {
-        to_user <- sub("@", "", mention)  # remove the @ from the username
-        if(to_user %in% usernames)  #  save only if the mentioned user is in our data set
+        to_user <- sub("@", "", mention) 
+        if(to_user %in% usernames)
           edges <- c(edges, from_user, to_user)
       }
     }
   }
-  # create the new edges
+  # creo i nuovi archi
   if(length(edges) > 0){
-    new_edges <- matrix(edges, ncol=2, byrow=T)
+    new_edges <- matrix(edges, ncol=2, byrow=T) # matrice che corrisponde a un vettore di coppie
     for (i in 1:nrow(new_edges)){
-      # we add the edge only if it is not a loop(mention to itself), we do this because this type of connection are not useful for our research. 
-      # we add an edge only if it wasn't already in the graph, we are interested in the single connection not in weights
+      # aggiungo l'arco al grafo solo se:
+      # - non è una menzione a se stesso (un loop) dato che non è utile per la ricerca
+      # - l'arco non è già presente nel grafo, non siamo interessati al peso in questo caso
       if(new_edges[i,1] != new_edges[i,2] && !are.connected(net3, new_edges[i,1], new_edges[i,2]))
         net3 <- add_edges(net3, c(new_edges[i,1], new_edges[i,2]))
         
     }
   }
-  # calculate the triangles and probability of closure
-  triangles <- sum(count_triangles(net3))/3
+  # calcolo il numero di triangoli e la probabilità di chiusura:
+  triangles <- sum(count_triangles(net3))/3 # numero di triangoli (diviso 3 dato che vengono contati per ogni nodo del triangolo)
   triangles_over_time <- c(triangles_over_time, triangles)
-  # calculate the number of open triangles -> we have 2 of the 3 edges already and we want to close it so add the remaining edge
+  # calcoliamo il numero di triangoli candidati
   deg <- igraph::degree(net3)
-  open_triangles <- sum(deg * (deg-1) / 2) # sum of possible combination for each vertex
+  open_triangles <- sum(deg * (deg-1) / 2)
   if(open_triangles > 0)
-    closure_prob <- sum(count_triangles(net3)) / open_triangles # the number of closure triadic compared to the number of possible triadic
+    # la frazione di chiusure triadiche rispetto alle candidate
+    closure_prob <- sum(count_triangles(net3)) / open_triangles
   else 
     closure_prob <- 0
+  # mi salvo i valori per ogni mese
   opt <- c(opt, open_triangles)
   closure_prob_ot <- c(closure_prob_ot, closure_prob)
-  # save the snapshot of the graphs
   graph_list[[m]] <- as.undirected(net3)
-  # plot the graph of the month
+  # visualizziamo l'evoluzione della rete mese per mese
   plot(
     net3, 
     main=paste("Rete al mese:", m),
@@ -194,87 +223,97 @@ for (m in months){
   )
 }
 
-par(mfrow = c(1, 1))
-plot(
-  net3, 
-  main=paste("Rete al mese:", m),
-  layout=layout2,
-  vertex.label=NA,
-  edge.arrow.size=.2,
-  vertex.size=deg/10+2
-)
+
+# 15. risultati ottenuti dal processo al punto 14
 triangles_over_time
 opt
 closure_prob_ot
-nmonths <- factor(months, levels = c("2015-09", "2015-10", "2015-11", "2015-12", "2016-01", "2016-02", "2016-03", "2016-04", "2016-05"), ordered=T)
-par(mfrow=c(1,2))
-plot(nmonths, triangles_over_time, type = "a", col = "blue",
-     xlab = "Month", ylab = "Triadic Closure", main = "Evolution of Triadic Closure")
-plot(nmonths, triangles_over_time, type = "a", col = "blue",
-     xlab = "Month", ylab = "Closure Probability", main = "Evolution of Closure Probability")
 
+# grafico che raffigura l'evoluzione della probabilità di chiusura mese per mese
+closure_df <- data.frame(months, closure_prob_ot)
+ggplot(closure_df, aes(x = months, y = closure_prob_ot, group = 1)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Evoluzione Probabilità di Chiusura per Mese",
+       x = "Mese",
+       y = "Probabilità Chiusura") +
+  theme_minimal()
 
+# 16. analisi della formazione dei legami
+# matrici con 2 colonne: 0 legami in comune tra i due utenti e 1 o più legami in comune tra i due utenti
+T_k <- matrix(0, nrow = length(months)-1, ncol = 2) # numero di legami creati nel mese nei 2 casi
+pairs <- matrix(0, nrow = length(months)-1, ncol=2) # numero di coppie di utenti che possono creare una connessione durante il mese nei 2 casi
+T_k_frac <- matrix(0, nrow = length(months)-1, ncol = 2) # rapporto tra le 2 misure
 
-# How much more likely is a link to form between two people in a social network if they already have a connection in common?
-# we want now to check if a connection is created more probably if there is already a common connection -> so if the network evolve more thanks to triadic closure or new casual connection.
-# to do this we will track link formation, from a snapshot to another we will:
-# - identify the pairs of nodes that have k connection in common in the first snapshot but are not directly connected by an edge
-# - find T(k): the fraction of these pairs that have formed an edge by the time of the second snapshot
-# we will then plot T as a function to illustrate the effect of common friends on the formation of links
-
-T_k <- matrix(0, nrow = length(months)-1, ncol = 2) # when k is 5 and above in just one column
-T_k_frac <- matrix(0, nrow = length(months)-1, ncol = 2)
-pairs <- matrix(0, nrow = length(months)-1, ncol=2)
 for (m in 1:(length(months)-1)){
+  # snapshot della rete sociale a inizio e fine mese con rispettive matrici di adiacenze (usate per calcolare le connessioni in comune tra utenti)
   snap1 <- graph_list[[months[m]]]
   snap2 <- graph_list[[months[m+1]]]
   adj1 <- as_adj(snap1, sparse = FALSE)
   adj2 <- as_adj(snap2, sparse=FALSE)
-  # first we get the common connections between each pair of nodes 
-  com_connection <- adj1 %*% adj1 # this give us a matrix containing in each cell the number of path of length 2 between the nodes of row i and column j, so basically the number of common neighbors between node i and node j
-  # we now have to obtain only the pairs that haven't already formed an edge, so we are interested only in pair that aren't connected in adj1 and check if they have formed a connection in adj2, we use com_connection to know how many common connection they have so to save them into the right column
+  # connessioni in comune tra coppie di utenti 
+  com_connection <- adj1 %*% adj1 # matrice contenente in ogni cella il numero di path di lunghezza 2 tra utente i e j e quindi il numero di vicini in comune tra i 2 utenti, dove il vicino rappresenta il nodo intermedio
+  # vogliamo ora ottenere le coppie che non hanno un arco in adj1 e che abbiano formato un arco durante il mese e quindi in adj2 è presente
   n <- nrow(adj1)
   for(i in 1:(n-1)){
     for(j in (i+1):n){
-      if(adj1[i,j]==0){  # if they don't have a connection in the first snaphshot
-        k <- com_connection[i,j]
-        if(k>1) # we group all the one with above 5 connection together
+      if(adj1[i,j]==0){  # se non sono connesse nel primo snapshot
+        k <- com_connection[i,j] # il numero di vicini in comune
+        if(k>1) # se maggiore o uguale a 1 operiamo nella seconda colonna delle matrici
           k <- 1
         
-        pairs[m,k+1] <- pairs[m,k+1] + 1
+        pairs[m,k+1] <- pairs[m,k+1] + 1 # aumentiamo il numero di coppie di utenti che possono creare una connessione durante il mese nel caso selezionato
         if(adj2[i,j]==1)
-          T_k[m, k+1] <- T_k[m, k+1] + 1 # increase the function
+          T_k[m, k+1] <- T_k[m, k+1] + 1 # aumentiamo il numero di legami creati durante il mese nel caso selezionato
       }
     }
   }
-  T_k_frac[m,] <- T_k[m,] / pairs[m,]
+  T_k_frac[m,] <- T_k[m,] / pairs[m,] # rapporto tra le 2 misure nel mese
 }
-# at this point we have a matrix containing the number of connection created every month where there is a common neighbor or not, the number of pair that are not connected by an edge that have a common neighbor or not and the fraction T_k for each month
-barplot(t(T_k), names.arg=months[-1], col=c("red", "blue"), legend.text = c("0 common neighbor", "≥1 common neighbor"))
-# since we have that in the first few months less connection were made, but the number of possible connection was quite the same, it makes more sense not to do the mean of the months but to sum up the connection made and the not connected pair for each month and then at that point look at the total fraction.
-# I decided to do this because low activity months can distort the average if we take the mean, but if we sum numerator and denominators across all months we get a more robust estimator that reflect the actual volume of link formation.
-T_k
-pairs
+
+# visualizziamo i risultati ottenuti:
+
+# 17. visualizziamo il numero assoluto di connessioni data la presenza di vicini in comune
+Tk_df <- as.data.frame(T_k, months[-1]) # dataframe per il ggplot
+Tk_df$month <- factor(rownames(Tk_df), levels = rownames(Tk_df))
+Tk_long <- pivot_longer(Tk_df, cols = c(V1, V2), names_to = "Categoria", values_to = "Valore") # il valore deve essere di tipo long per il ggplot
+Tk_long$category <- factor(Tk_long$Categoria, 
+                            levels = c("V1", "V2"),
+                            labels = c("0 common neighbor", "≥1 common neighbor"))
+ggplot(Tk_long, aes(x = month, y = Valore, fill = category)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = c("azure3", "aquamarine3")) +
+  labs(x = "Mese", y = "Connessioni Formate", fill = "Categoria") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ggtitle("N° Connessioni data presenza Vicini in Comune")
+
+# 18. calcolo il risultato complessivo, sommo il numero di connessioni formate e connessioni possibili di ogni mese e faccio il rapporto
 T_k_tot <- colSums(T_k)
-# since we are calculating the total opportunity over time, we will sum up the denominator, this is because in every month the pairs had the possibility to connect
-# in this way we respond to the question: out of all the times a connection could have formed, how often did it actually form across the months?
 pairs_tot <- colSums(pairs)
-T_k_tot # total number of connection created where there is at least a common neighbor or not
-pairs_tot # total number of pairs that can create a connection during the months, so each pair that did not create a connection is retake for the sum each month
 T_k_tot <- T_k_tot / pairs_tot
-T_k_tot
+# visualizziamo il risultato complessivo, cioè la probabilità di formazione connessione data la presenza di vicini in comune
+T_k_tot_df <- data.frame(
+  Categoria = c("0 common neighbors", "≥1 common neighbors"),
+  Probabilità = T_k_tot
+)
 
-barplot(T_k_tot, beside=T, names.arg=c("0 common neighbors", "≥1 common neighbors"), main = "T(k) per month",
-        ylab = "Probability of nodes connection", col=c("red", "blue"))
+ggplot(T_k_tot_df, aes(x = Categoria, y = Probabilità, fill = Categoria)) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  scale_fill_manual(values = c("azure3", "aquamarine3")) +
+  labs(title = "Probabilità Formazione Connessione data presenza Vicini in Comune",
+       y = "Probabilità Formazione Connessione",
+       x = "") +
+  theme_minimal() +
+  theme(legend.position = "none")
 
-# we can see that indeed the triadic closure means a lot in the formation of a connection: when 2 nodes had 0 connection in common at the beginning of a month, the probabilty for them to create a connection in that month was on average 0.007 meanwhile when they had 1 or more connection in common, the probability is doubled
+# ******************************************************************************
 
+# PAROLE CHIAVE ED EMOZIONI
 
-
-# we are now interested in the most used words in the tweets of the ISIS fan, so from the starting dataset, we are interested in the fields tweet
-
+# 19. analisi bigrammi:
+# creo un dataframe composto da utente e tweet per poi togliere dal messaggio tutto il rumore (menzioni, hashtag, rt, link)
 tweets <- df[, c("username", "tweets")]
-# we are interested only on the message in the tweet, not to link or mentions
 tweets$tweets <- gsub("ENGLISH TRANSLATION:|rt", "", tweets$tweets, ignore.case = TRUE)
 tweets$tweets <- gsub("http[^[:space:]]+", "", tweets$tweets)
 tweets$tweets <- gsub("@\\w+", "", tweets$tweets)
@@ -282,48 +321,46 @@ tweets$tweets <- gsub("#\\w+", "", tweets$tweets)
 
 head(tweets)
 
+# creo il corpus 
 corpus = corpus(tweets, text_field = "tweets")
-summary(corpus)
-doc.tokens = tokens(corpus) # tokenize the text (split each document into individual tokens)
-doc.tokens = tokens(doc.tokens, remove_punct = TRUE, remove_numbers = TRUE) # we remove punctuation and numbers from the token (they are noise)
+doc.tokens = tokens(corpus) # tokenizzo i messaggi splitto ogni documento in token singoli
+# rimuovo tutte le forme di rumore: punteggiatura, numeri, stopwords
+doc.tokens = tokens(doc.tokens, remove_punct = TRUE, remove_numbers = TRUE) 
 doc.tokens = tokens_select(doc.tokens, stopwords(language = "en", source = "snowball", simplify = TRUE), selection ='remove') # we remove common english words like "is", "the", "and"
-doc.tokens = tokens_tolower(doc.tokens) # convert all words to lower case, making analysis consistent
-doc.tokens <- tokens_keep(doc.tokens, pattern = "^[a-z]+$", valuetype = "regex") # we keep only tokens that are entirely lowercase alphabet characters
+doc.tokens = tokens_tolower(doc.tokens) # tutte le parole convertite in lower case
+doc.tokens <- tokens_keep(doc.tokens, pattern = "^[a-z]+$", valuetype = "regex") # teniamo solo token composti da parole con alfabeto classico
 
-toks_ngram = tokens_ngrams(doc.tokens, n = 2) # non only single words but also pairs of consecutive words, we now have a richer set of features than just individual words
-toks_ngram
+toks_ngram = tokens_ngrams(doc.tokens, n = 2) # bigrammi
 
-dfmat = dfm(toks_ngram) %>% dfm_trim(min_termfreq = 20) # this create a DFM (rows are the documents, columns are the features -> cells contains frequency of feature in a document) and we filter out rare terms (we only want terms with frequency > 10)
-dfmat
-
+dfmat = dfm(toks_ngram) %>% dfm_trim(min_termfreq = 20) # creo la DFM (righe sono i document, le colonne this create a DFM (rows are the documents, columns sono parole del dizionario)
 
 features_dfm = textstat_frequency(dfmat, n = 100)
 features_dfm$feature = with(features_dfm, reorder(feature, -frequency))
-features_dfm
-
+# rappresentazione delle frequenze sotto forma di tabella
+features_dfm 
+# rappresentazione delle frequenze sotto forma di textplot
 textplot_wordcloud(dfmat)
 
-# we now want to check the most used hashtags
+#  20. analisi degli hashtag
 hashtags <- df[, c("username", "tweets")]
-# this time we are interested only in the hashtags
+# interessati solo negli hashtag
 hashtags$hashtag_list <- regmatches(hashtags$tweets, gregexpr("#\\w+", hashtags$tweets))
 hashtags$hashtag <- sapply(hashtags$hashtag_list, paste, collapse=" ")
-head(hashtags$hashtag_list)
+# stessa procedura dei bigrammi:
 corpus = corpus(hashtags, text_field = "hashtag")
 summary(corpus)
-toks_hashtag = tokens(corpus) # tokenize the text (split each document into individual tokens)
-toks_hashtag = tokens(toks_hashtag, remove_punct = TRUE) # we remove punctuation and numbers from the token (they are noise)
+toks_hashtag = tokens(corpus) 
+toks_hashtag = tokens(toks_hashtag, remove_punct = TRUE) 
 dfmat2 = dfm(toks_hashtag) %>% dfm_trim(min_termfreq = 20)
-dfmat2
 features_dfm = textstat_frequency(dfmat2, n = 100)
 features_dfm$feature = with(features_dfm, reorder(feature, -frequency))
 features_dfm
 textplot_wordcloud(dfmat2)
 
 
-# Sentiment Analysis
+# 21. analisi dei sentimenti
 
-# use NRC Emotion Lexicon (list of words and their associations)
+# uso il lexicon NRC Emotion (lista di parole e il loro valore associato per i vari sentimenti)
 sentiment = get_nrc_sentiment(tweets$tweets)
 td = data.frame(t(sentiment))
 td = data.frame(rowSums(td[-1]))
@@ -333,62 +370,61 @@ rownames(tdw) <- NULL
 tdw
 
 
-# Plot Emotions
+# 22. visualizzazione delle emozioni
 ggplot(tdw[1:8, ], aes(x = sentiment, y = count, fill = sentiment)) +
   geom_bar(stat = "identity") +
-  labs(x = "emotion") +
-  theme(axis.text.x=element_text(angle=45, hjust=1), legend.title = element_blank())
+  labs(x = "Emozioni", y="Conteggio") +
+  theme(axis.text.x=element_text(angle=45, hjust=1), legend.title = element_blank())+
+  ggtitle("Distribuzione Emozioni")
 
-# Plot Polarity
+# 23. visualizzazione delle polarità
 ggplot(tdw[9:10, ], aes(x = sentiment, y = count, fill = sentiment)) +
   geom_bar(stat = "identity") +
-  labs(x = "polarity") +
-  theme(axis.text.x=element_text(angle=45, hjust=1), legend.title = element_blank())
+  labs(x = "Polarità", y="Conteggio") +
+  theme(axis.text.x=element_text(angle=45, hjust=1), legend.title = element_blank()) +
+  ggtitle("Distribuzione Polarità")
 
 
 
+# ******************************************************************************
 
+# ANALISI DELLE COMUNITÀ
 
-
-# Now that we have complete the analysis of the complete graph let's try to go a little more in the specific and do an analysis of the communities
-# let's now try to detect the communities -> disconnected parts of the graph
-
-# thanks to community, it's possible to do an analysis of the content for each community or check the community over time to see if they change or not
-
-
-communities <- multilevel.community(net2, weights = E(net2)$weight) # create community based on the strength of ties, in this way we group strong mutual connections more tightly
-communities
-V(net2)$community <- membership(communities)
-V(net2)$community
+# 24. inizio creando le comunità utilizzando il metodo di Louvain
+communities <- multilevel.community(net2, weights = E(net2)$weight) # creo le comunità in base alla forza dei loro legami, in modo da considerare quanto sia stretto un legame per la formazione delle comunità
+V(net2)$community <- membership(communities) # assegno ad ogni nodo la comunità di appartenenza
+V(net2)$community 
 inv_weights <- 1 / E(net2)$weight
 
+# analisi strutturale:
+# dataframe che descrive la struttura delle diverse comunità nel grafo completo, inizialmente è un dataframe contenente gli utenti ma poi tramite funzione di aggregazione prendo la media dei valori di ogni comunità
 centrality_df <- data.frame(
   username = V(net2)$name,
   community = V(net2)$community,
-  degree = degree(net2),
+  degree = igraph::degree(net2),
   strength = strength(net2, weights = E(net2)$weight),
-  centrality = eigen_centrality(net2, weights = E(net2)$weight)$vector,  # how central a community is
-  betweenness = betweenness(net2, weights = inv_weights), # how much a node control the flow of information
-  closeness = closeness(net2, weights = inv_weights)    # how fast a node can reach other nodes, the inverse of distances
+  centrality = eigen_centrality(net2, weights = E(net2)$weight)$vector,  # centralità del nodo
+  betweenness = betweenness(net2, weights = inv_weights), # quanto un utente controlla il flusso di informazioni
+  closeness = closeness(net2, weights = inv_weights)    # quanto velocemente un utente può raggiungere gli altri utenti
 )
 centrality_df
+aggregate(. ~ community, data = centrality_df[-1], FUN = mean) # tramite funzione di aggregazione prendo la media dei valori per ogni comunità
 
-# let's see the communities in a graph with a color for each of them:
-colorVals <- c("firebrick3", "slateblue1", "yellow1", "olivedrab1", "pink", "seagreen1", "orange", "turquoise1")
+# 25. visualizziamo la rete sociale dove il colore del nodo rappresenta la comunità di cui fa parte
+colorVals <- c("firebrick3", "slateblue1", "yellow1", "olivedrab1", "pink", "seagreen1", "orange", "turquoise1") # i colori sono in ordine di comunità quindi la comunità 1 sarà rossa, la 2 sarà violetta, ...
 V(net2)$color <- colorVals[V(net2)$community]
 plot.igraph(net2, vertex.label = NA,layout=layout, vertex.size=5)
 
-# we can now check how the communities behave in the network: the community that are more influent
-aggregate(. ~ community, data = centrality_df[-1], FUN = mean)
-# we can see that the most important communities under every aspect are community 1, 2 and 3
 
-# let's see more in the detail the structure of the communities, we would like to know the density of the community, the triadic closure and the assortivity (if nodes tends to connect to similiar nodes)
+
+# 26. struttura interna delle comunità:
 community_id <- unique(V(net2)$community)
 edge_density(net2, loops=F)
 density <- c()
 nnodes <- c()
 diameter <- c()
 transitivity <- c()
+# calcolo le misure per ogni comunità e le inserisco in un dataframe
 for (i in community_id){
   sub_net <- induced.subgraph(net2, V(net2)[community==i])
   density <- c(density, edge_density(sub_net, loops=F))
@@ -396,38 +432,52 @@ for (i in community_id){
   diameter <- c(diameter, length(get_diameter(sub_net)))
   transitivity <- c(transitivity, transitivity(sub_net))
 }
-density # we can see that the density inside each community is significantly higher than in the general network, we can see that the communities 1-4 have a lower density but it's normal since the have more nodes
-nnodes # indeed having 20 nodes and a density of 0.15 means that the network is sparse but not a lot, indeed the diameter of the communities is around 5-6, we can say that the communities are sparse but definitely less than the network
-diameter
-transitivity
-# we are also curious about the assortativity per community : how much does nodes tend to connect to nodes that are of the same community
-assortativity_nominal(net2, types = as.factor(V(net2)$community), directed=F)
-# the value is positive, so we can say that there is the tendency of nodes to connect with other nodes of the same community
-# we can say that nodes interact more with nodes of the same community than with other nodes -> mentions are more common inside a community, probably information circles more inside each community, but to be sure of this let's see if the text of each community are distinct or similiar:
+community_stats <- data.frame(
+  community = community_id,
+  density = density,
+  nodes = nnodes,
+  diameter = diameter,
+  transitivity = transitivity
+)
+community_stats
 
-head(tweets)
-# we already have a data frame containing the messagges and the users, we need to keep only the users that are in a community and specify the community of each user
-comtweets <- tweets %>% inner_join(centrality_df %>% select(username, community))
+# assortatività: valore che indica se un utente tende a connettersi a utenti della stessa comunità
+assortativity_nominal(net2, types = as.factor(V(net2)$community), directed=F)
+
+
+# 27. analisi dei contenuti:
+# nuovo dataframe simile a quello per l'analisi delle di parole chiave ed emozioni solo che questa volta aggiungiamo anche la variabile comunità
+comtweets <- tweets %>% inner_join(centrality_df %>% select(username, community)) 
 head(comtweets)
-# now we are ready to look at the top 3 communities contents and see if there are differences, we just need to do the classic text and sentiment analysis:
+# guardiamo i contenuti delle comunità:
 community_ngrams <- list()
 dfmat_coms <- list()
 community_id <- unique(comtweets$community)
+# questa è la stessa procedura usata per l'analisi dei bigrammi:
 for (i in community_id){
   corpus = corpus(comtweets[comtweets$community==i,], text_field = "tweets")
   summary(corpus)
-  doc.tokens = tokens(corpus) # tokenize the text (split each document into individual tokens)
-  doc.tokens = tokens(doc.tokens, remove_punct = TRUE, remove_numbers = TRUE) # we remove punctuation and numbers from the token (they are noise)
-  doc.tokens = tokens_select(doc.tokens, stopwords(language = "en", source = "snowball", simplify = TRUE), selection ='remove') # we remove common english words like "is", "the", "and"
-  doc.tokens = tokens_tolower(doc.tokens) # convert all words to lower case, making analysis consistent
-  doc.tokens <- tokens_keep(doc.tokens, pattern = "^[a-z]+$", valuetype = "regex") # we keep only tokens that are entirely lowercase alphabet characters
-  
-  community_ngrams[[i]] <- tokens_ngrams(doc.tokens, n = 2) # non only single words but also pairs of consecutive words, we now have a richer set of features than just individual words
-  dfmat_coms[[i]] <- dfm(community_ngrams[[i]]) %>% dfm_trim(min_termfreq = 20)
+  doc.tokens = tokens(corpus) 
+  doc.tokens = tokens(doc.tokens, remove_punct = TRUE, remove_numbers = TRUE)
+  doc.tokens = tokens_select(doc.tokens, stopwords(language = "en", source = "snowball", simplify = TRUE), selection ='remove')
+  doc.tokens = tokens_tolower(doc.tokens) 
+  doc.tokens <- tokens_keep(doc.tokens, pattern = "^[a-z]+$", valuetype = "regex")
+  community_ngrams[[i]] <- tokens_ngrams(doc.tokens, n = 2)
+  dfmat_coms[[i]] <- dfm(community_ngrams[[i]]) %>% dfm_trim(min_termfreq = 8)
 }
-textplot_wordcloud(dfmat_coms[[1]])
 
-# use NRC Emotion Lexicon (list of words and their associations)
+# 28. vediamo come si comportano le comunità più grandi (le prime 4):
+freq_text <- list()
+par(mfrow=c(2,1))
+for (i in (1:4)){
+  features_dfm = textstat_frequency(dfmat_coms[[i]], n = 20)
+  features_dfm$feature = with(features_dfm, reorder(feature, -frequency))
+  freq_text[[i]] <- features_dfm$feature
+  #textplot_wordcloud(dfmat_coms[[i]])
+}
+freq_text
+
+# 29. passiamo ora all'analisi dell'emozioni delle diverse comunità
 tdw_coms <- list()
 for (i in community_id){
   sentiment = get_nrc_sentiment(comtweets[comtweets$community==i,]$tweets)
@@ -440,25 +490,32 @@ for (i in community_id){
 }
 
 
-# Plot Emotions
-ggplot(tdw[1:8, ], aes(x = sentiment, y = count, fill = sentiment)) +
-  geom_bar(stat = "identity") +
-  labs(x = "emotion") +
-  theme(axis.text.x=element_text(angle=45, hjust=1), legend.title = element_blank())
+# 30. visualizziamo le emozioni emanate dai messaggi delle 4 comunità più grandi
+plots <- list()
+for (i in (1:4)){
+  p <- ggplot(tdw_coms[[i]][1:8, ], aes(x = sentiment, y = count, fill = sentiment)) +
+    geom_bar(stat = "identity") +
+    labs(x = "emotion", title = paste("Community", i)) +
+    theme(axis.text.x=element_text(angle=45, hjust=1), legend.title = element_blank())
+  #print(tdw_coms[[i]])
+  plots[[i]] <- p
+}
+# dato che con ggplot, par(mfrow()) non funziona, utilizziamo un altra libreria gridExtra
+grid.arrange(grobs = plots, ncol = 2)
 
 
-# let's now see who are the users that are more important in each of these community:
-
+# 31. analsi degli utenti nelle comunità
+# otteniamo l'utente più influente di ciascuna delle 4 comunità più grandi (tramite il valore di eigencentrality)
 top_users <- centrality_df %>%
-  filter(community %in% c(1, 2, 3)) %>%
+  filter(community %in% c(1, 2, 3, 4)) %>%
   group_by(community) %>%
-  top_n(2, centrality) %>% 
+  top_n(1, centrality) %>% 
   arrange(community, desc(centrality))
-top_users
+top_users # l'utente più influente di ciascuna comunità con le corrispettive caratteristiche
 users_id <- top_users$username
 
-# let's see if what they say and the emotions they transmit are the same of their community or if they differ from it, this is also a way to see if there is some type of homophily and social influence in the communities:
-
+# compariamo i contenuti degli utenti e delle corrispettive comunità (senza tenere conto degli utenti stessi):
+# 32. bigrammi più utilizzati dai 4 utenti:
 users_ngrams <- list()
 dfmat_users <- list()
 for (i in users_id){
@@ -471,26 +528,42 @@ for (i in users_id){
   doc.tokens <- tokens_keep(doc.tokens, pattern = "^[a-z]+$", valuetype = "regex") # we keep only tokens that are entirely lowercase alphabet characters
   
   users_ngrams[[i]] <- tokens_ngrams(doc.tokens, n = 2) # non only single words but also pairs of consecutive words, we now have a richer set of features than just individual words
-  dfmat_users[[i]] <- dfm(users_ngram[[i]]) %>% dfm_trim(min_termfreq = 20)
+  dfmat_users[[i]] <- dfm(users_ngrams[[i]]) %>% dfm_trim(min_termfreq = 3)
 }
 
-textplot_wordcloud(dfmat_users[1])
-
-# use NRC Emotion Lexicon (list of words and their associations)
-tdw_users <- list()
+# visualizziamo i bigrammi più utilizzati:
+freq_text <- list()
+par(mfrow=c(2,1))
 for (i in users_id){
-  sentiment = get_nrc_sentiment(comtweets[comtweets$username==i,]$tweets)
-  td = data.frame(t(sentiment))
-  td = data.frame(rowSums(td[-1]))
-  names(td)[1] <- "count"
-  tdw <- cbind("sentiment" = rownames(td), td)
-  rownames(tdw) <- NULL
-  tdw_users[[i]] <- tdw
+  features_dfm = textstat_frequency(dfmat_users[[i]], n = 20)
+  features_dfm$feature = with(features_dfm, reorder(feature, -frequency))
+  freq_text[[i]] <- features_dfm$feature
+}
+freq_text
+
+# 33. bigrammi più utilizzati dalle 4 comunità senza tenere conto dell' utente più influente di ciascuna comunità
+comtweets <- comtweets %>% filter(!username %in% c("mobi_ayubi", "WarReporter1", "Nidalgazaui", "MaghrebiQM	")) # rimuovo gli utenti più influenti dal dataframe
+for (i in community_id){
+  corpus = corpus(comtweets[comtweets$community==i,], text_field = "tweets")
+  summary(corpus)
+  doc.tokens = tokens(corpus) # tokenize the text (split each document into individual tokens)
+  doc.tokens = tokens(doc.tokens, remove_punct = TRUE, remove_numbers = TRUE)
+  doc.tokens = tokens_select(doc.tokens, stopwords(language = "en", source = "snowball", simplify = TRUE), selection ='remove')
+  doc.tokens = tokens_tolower(doc.tokens)
+  doc.tokens <- tokens_keep(doc.tokens, pattern = "^[a-z]+$", valuetype = "regex")
+  
+  community_ngrams[[i]] <- tokens_ngrams(doc.tokens, n = 2)
+  dfmat_coms[[i]] <- dfm(community_ngrams[[i]]) %>% dfm_trim(min_termfreq = 8)
 }
 
-# Plot Emotions
-ggplot(tdw[1:8, ], aes(x = sentiment, y = count, fill = sentiment)) +
-  geom_bar(stat = "identity") +
-  labs(x = "emotion") +
-  theme(axis.text.x=element_text(angle=45, hjust=1), legend.title = element_blank())
+# visualizziamo i bigrammi più utilizzati
+freq_text <- list()
+par(mfrow=c(2,1))
+for (i in (1:4)){
+  features_dfm = textstat_frequency(dfmat_coms[[i]], n = 20)
+  features_dfm$feature = with(features_dfm, reorder(feature, -frequency))
+  freq_text[[i]] <- features_dfm$feature
+  #textplot_wordcloud(dfmat_coms[[i]])
+}
+freq_text
 
