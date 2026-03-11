@@ -13,7 +13,7 @@ library(quanteda.textplots)
 library(gridExtra)
 
 # 2. importo il dataset da un file CSV
-df <- read.csv("tweets.csv")
+df <- read.csv("../data/tweets.csv")
 head(df)  
 
 # ******************************************************************************
